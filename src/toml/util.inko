@@ -1,0 +1,34 @@
+import std.string (StringBuffer)
+import std.iter (Iter, Stream)
+
+impl StringBuffer {
+  fn pub inline mut push_byte(byte: Int) {
+    push(ByteArray.from_array([byte]).to_string)
+  }
+}
+
+fn pub flatten[T](iter: Stream[Array[T]]) -> Array[T] {
+  # let mut inner_iter = match iter.next {
+  #   case None -> Option.None
+  #   case Some(arr) -> Option.Some(arr.iter)
+  # }
+  # let mut inner_iter = iter.next.map(fn (arr) { arr.into_iter })
+  # let mut inner_array = iter.next[]
+  # return Stream.new(fn move {
+  #   loop {
+  #     match inner_iter {
+  #       case None -> return Option.None
+  #       case Some(i) -> match i.next {
+  #         case None -> inner_iter = iter.next.map(fn (arr) { arr.iter })
+  #         case Some(val: T) -> return Option.Some(val)
+  #       }
+  #     }
+  #   }
+  # })
+
+  let mut result: Array[T] = []
+  for arr in iter {
+    result.append(arr)
+  }
+  return result
+}

@@ -1,0 +1,74 @@
+import std.clone (Clone)
+import std.cmp (Equal)
+import std.fmt (Format, Formatter)
+import std.fs.file (ReadOnlyFile)
+import std.time (DateTime, Date, Time)
+import toml.parser (Parser, Error)
+
+type pub enum TomlValue {
+  case String(String)
+  case Integer(Int)
+  case Float(Float)
+  case Boolean(Bool)
+  case DateTime(DateTime)
+  case Date(Date)
+  case Time(Time)
+  case Array(Array[TomlValue])
+  case Table(Map[String, TomlValue])
+}
+
+impl Equal for TomlValue {
+  fn pub ==(other: ref TomlValue) -> Bool {
+    match self {
+      case String(lhs)   -> match other { case String(rhs)   -> lhs == rhs case _ -> false }
+      case Integer(lhs)  -> match other { case Integer(rhs)  -> lhs == rhs case _ -> false }
+      case Float(lhs)    -> match other { case Float(rhs)    -> lhs == rhs case _ -> false }
+      case Boolean(lhs)  -> match other { case Boolean(rhs)  -> lhs == rhs case _ -> false }
+      case DateTime(lhs) -> match other { case DateTime(rhs) -> lhs == rhs case _ -> false }
+      case Date(lhs)     -> match other { case Date(rhs)     -> lhs == rhs case _ -> false }
+      case Time(lhs)     -> match other { case Time(rhs)     -> lhs == rhs case _ -> false }
+      case Array(lhs)    -> match other { case Array(rhs)    -> lhs == rhs case _ -> false }
+      case Table(lhs)    -> match other { case Table(rhs)    -> lhs == rhs case _ -> false }
+    }
+  }
+}
+
+impl Format for TomlValue {
+  fn pub fmt(formatter: mut Formatter) {
+    match self {
+      case String(val)   -> formatter.write('"${val}"')
+      case Integer(val)  -> val.fmt(formatter)
+      case Float(val)    -> val.fmt(formatter)
+      case Boolean(val)  -> val.fmt(formatter)
+      case DateTime(val) -> val.fmt(formatter)
+      case Date(val)     -> val.fmt(formatter)
+      case Time(val)     -> val.fmt(formatter)
+      case Array(val)    -> val.fmt(formatter)
+      case Table(val)    -> val.fmt(formatter)
+    }
+  }
+}
+
+impl Clone for TomlValue {
+  fn pub clone() -> TomlValue {
+    match self {
+      case String(val)   -> TomlValue.String(val)
+      case Integer(val)  -> TomlValue.Integer(val)
+      case Float(val)    -> TomlValue.Float(val)
+      case Boolean(val)  -> TomlValue.Boolean(val)
+      case DateTime(val) -> TomlValue.DateTime(val.clone())
+      case Date(val)     -> TomlValue.Date(val)
+      case Time(val)     -> TomlValue.Time(val)
+      case Array(val)    -> TomlValue.Array(val.clone())
+      case Table(val)    -> TomlValue.Table(val.clone())
+    }
+  }
+}
+
+fn pub from_string(data: ref String) -> Result[TomlValue, Error] {
+  return Parser.from_string(data)
+}
+
+fn pub from_file(file: mut ReadOnlyFile) -> Result[TomlValue, Error] {
+  return Parser.from_file(file)
+}

@@ -1,0 +1,540 @@
+import std.clone (Clone)
+import std.cmp (Equal)
+import std.fmt (Format, Formatter)
+import std.fs.file (ReadOnlyFile)
+import std.int
+import std.io (Error as IoError)
+import std.iter (Iter, Stream, Peekable)
+import std.string (StringBuffer)
+import std.time (DateTime)
+import std.locale.en (Locale)
+import toml.ascii
+import toml.util (flatten)
+import toml (TomlValue)
+
+type pub Error {
+  let pub @line: Int
+  let pub @column: Int
+  let pub @desc: String
+  let pub @io_error: Option[IoError]
+
+  fn static for_token(token: ref Token, desc: String) -> Error {
+    Error(token.line, token.column, desc, Option.None)
+  }
+
+  fn static new(line: Int, column: Int, desc: String) -> Error {
+    Error(line, column, desc, Option.None)
+  }
+
+  fn static from_io(error: IoError) -> Error {
+    Error(0, 0, error.to_string, Option.Some(error))
+  }
+}
+
+type pub copy enum TokenType {
+  case Symbol
+  case String
+  case Other
+}
+
+impl Equal for TokenType {
+  fn pub ==(other: ref TokenType) -> Bool {
+    match self {
+      case Symbol -> match other { case Symbol -> true case _ -> false }
+      case String -> match other { case String -> true case _ -> false }
+      case Other -> match other { case Other -> true case _ -> false }
+    }
+  }
+}
+
+type pub Token {
+  let @type: TokenType
+  let @str: String
+  let @line: Int
+  let @column: Int
+}
+
+impl Equal for Token {
+  fn pub ==(other: ref Token) -> Bool {
+    return @type == other.type and @str == other.str and @line == other.line and @column == other.column
+  }
+}
+
+impl Format for Token {
+  fn pub fmt(formatter: mut Formatter) {
+    match @type {
+      case Symbol -> formatter.write("'${@str}' (line ${@line}, column ${@column})")
+      case String -> formatter.write('"${@str}" (line ${@line}, column ${@column})')
+      case Other -> formatter.write("${@str} (line ${@line}, column ${@column})")
+    }
+  }
+}
+
+impl Clone for Token {
+  fn pub clone() -> Token {
+    Token(@type, @str, @line, @line)
+  }
+}
+
+let FILE_CHUNK_SIZE = 1024
+type pub Parser {
+  fn pub static from_string(data: ref String) -> Result[TomlValue, Error] {
+    let line_iter = data.split("\n").map(fn (line) { Result.Ok(line) }).with_index
+    return parse(line_iter)
+  }
+
+  fn pub static from_file(file: mut ReadOnlyFile) -> Result[TomlValue, Error] {
+    let mut buffer = ByteArray.new
+    let mut buffer_idx = 0
+    let line_iter = Stream.new(fn move {
+      let mut line = ByteArray.new
+      loop {
+        match buffer.opt(buffer_idx) {
+          case None -> {
+            buffer.clear
+            let amount_read = match file.read(buffer, 1024) {
+              case Ok(amount_read) -> amount_read
+              case Error(err) -> return Option.Some(Result.Error(err))
+            }
+            if amount_read == 0 {
+              if line.size > 0 {
+                let line_str = line.to_string
+                line = ByteArray.new
+                return Option.Some(Result.Ok(line_str))
+              }
+              return Option.None
+            }
+            buffer_idx = 0
+          }
+          case Some(byte) -> {
+            if byte == ascii.LINE_FEED {
+              if line.last == Option.Some(ascii.CARRIAGE_RETURN) {
+                line.pop
+              }
+              let line_str = line.to_string
+              line = ByteArray.new
+              return Option.Some(Result.Ok(line_str))
+            } else {
+              line.push(byte)
+            }
+          }
+        }
+      }
+    }).with_index
+
+    return parse(line_iter)
+  }
+
+  fn static parse[I : Iter[(Int, Result[String, IoError])] + mut](line_iter: I) -> Result[TomlValue, Error] {
+    let mut root_table: Map[String, TomlValue] = Map.new
+    let mut cur_table = mut root_table
+    let mut cur_table_array: Option[mut Array[TomlValue]] = Option.None
+
+    loop {
+      let tokens: Array[Token] = try tokenize_line(mut line_iter)
+      
+      if tokens.empty? {
+        next
+      }
+
+      if tokens.get(0).str == "(end)" {
+        break
+      } else if tokens.get(0).str == '[' {
+        if tokens.size > 1 and tokens.get(1).str == '[' {
+          let key = try parse_array_header(tokens)
+        } else {
+          let key = try parse_table_header(tokens.clone)
+          let new_table = Map.new
+          cur_table = mut new_table
+          try add_to_table(root_table, (key, TomlValue.Table(new_table)))
+        }
+      } else {
+        let first_token = tokens.get(0).clone
+        let key_value = try parse_key_value(first_token, tokens.into_iter.peekable)
+        try add_to_table(mut cur_table, key_value)
+      }
+    }
+
+    return Result.Ok(TomlValue.Table(root_table))
+  }
+
+  fn pub static tokenize_line[I : Iter[(Int, Result[String, IoError])] + mut](line_iter: I) -> Result[Array[Token], Error] {
+    let mut line_num = 0
+    let line = match line_iter.next {
+      case None -> return Result.Ok([Token(TokenType.Symbol, "(end)", 0, 0)])
+      case Some((_, Error(io_error))) -> return Result.Error(Error.from_io(io_error))
+      case Some((index, Ok(line))) -> {
+        line_num = index
+        line
+      }
+    }
+
+    let mut tokens: Array[Token] = []
+    let mut arr = line.into_byte_array
+    let mut bytes = arr.iter.with_index.peekable
+    loop {
+      let mut pair = match bytes.next {
+        case Some((col, c)) -> (col, c)
+        case None() -> return Result.Ok(tokens)
+      }
+      match pair {
+        case (_, ascii.TAB) or (_, ascii.SPACE) -> nil
+        case (_, ascii.HASH) -> return Result.Ok(tokens)
+        case (col, ascii.DQUOTE) -> {
+          let str = StringBuffer.new
+          loop {
+            pair = try bytes.next.ok_or(Error.new(line_num, col, "No end of string"))
+            if pair.1 == ascii.BACKSLASH {
+              match try bytes.next.ok_or(Error.new(line_num, pair.0, "No end of string")) {
+                case (_, ascii.LOWER_B) -> str.push_byte(ascii.BACKSPACE)
+                case (_, ascii.LOWER_T) -> str.push("\t")
+                case (_, ascii.LOWER_N) -> str.push("\n")
+                case (_, ascii.LOWER_F) -> str.push_byte(ascii.FORM_FEED)
+                case (_, ascii.LOWER_R) -> str.push("\r")
+                case (_, ascii.DQUOTE) -> str.push('"')
+                case (_, ascii.BACKSLASH) -> str.push("\\")
+                case (col, ascii.LOWER_U) -> str.push(try parse_unicode(bytes, 4).ok_or(Error.new(line_num, col, "Invalid unicode escape")))
+                case (col, ascii.U) -> str.push(try parse_unicode(bytes, 8).ok_or(Error.new(line_num, col, "Invalid unicode escape")))
+                case (col, c) -> return Result.Error(Error.new(line_num, col, "Invalid escape: \\${ByteArray.from_array([c])}"))
+              }
+            } else if pair.1 == ascii.DQUOTE {
+              tokens.push(Token(TokenType.String, str.to_string, line_num, col))
+              break
+            }
+            str.push_byte(pair.1)
+          }
+        }
+        case (col, ascii.SQUOTE) ->  {
+          let str = StringBuffer.new
+          loop {
+            pair = try bytes.next.ok_or(Error.new(line_num, col, "No end of string"))
+            if pair.1 == ascii.SQUOTE {
+              tokens.push(Token(TokenType.String, str.to_string, line_num, col))
+              break
+            }
+            str.push_byte(pair.1)
+          }
+        }
+        case (col, c) if is_symbol?(c) -> {
+          tokens.push(Token(TokenType.Symbol, ByteArray.from_array([c]).to_string, line_num, col))
+        }
+        case (col, c) if valid_key_char?(c) or c == ascii.PLUS -> {
+          let str = StringBuffer.new
+          str.push_byte(c)
+          loop {
+            match bytes.peek {
+              case Some((_, c)) if valid_key_char?(c) or c == ascii.DOT or c == ascii.PLUS or c == ascii.COLON -> str.push_byte(c)
+              case Some(_) or None -> {
+                tokens.push(Token(TokenType.Other, str.to_string, line_num, col))
+                break
+              }
+            }
+            bytes.next.get
+          }
+        }
+        case (col, c) -> return Result.Error(Error.new(line_num, col, "Unexpected character: '${ByteArray.from_array([c])}'"))
+      }
+    }
+  }
+
+  fn static parse_table_header(tokens: Array[Token]) -> Result[Array[Token], Error] {
+    let last_token = tokens.pop.get
+    if last_token.str != ']' {
+      return Result.Error(Error.for_token(last_token, "Expected ']' at end of table header"))
+    }
+
+    return Result.Ok(try parse_key(tokens.get(0).clone, tokens.iter.skip(1)))
+  }
+
+  fn static parse_array_header(tokens: Array[Token]) -> Result[Array[Token], Error] {
+    for _ in 0.to(2) {
+      let last_token = tokens.pop.get
+      if last_token.str != ']' {
+        return Result.Error(Error.for_token(last_token, "Expected ']]' at end of array header"))
+      }
+    }
+
+    return Result.Ok(try parse_key(tokens.get(0).clone, tokens.iter.skip(2)))
+  }
+
+  fn static parse_key(prev_token: Token, tokens: Stream[ref Token]) -> Result[Array[Token], Error] {
+    let tokens: Stream[Array[Token]] = tokens.map(fn (token: ref Token) { match token.type {
+      case Other -> {
+        let mut arr: Array[Token] = flatten(token.str.split(".").map(fn (seg) { [
+          Token(TokenType.Other, seg, token.line, token.column),
+          Token(TokenType.Symbol, ".", token.line, token.column)
+        ] }))
+        arr.pop()
+        arr
+      }
+      case _ -> [token.clone]
+    }})
+    let key_parts = flatten(tokens).into_iter
+
+    let mut key: Array[Token] = []
+    let mut prev_token = prev_token
+    loop {
+      # Expect key
+      let key_part = try key_parts.next.ok_or(Error.for_token(prev_token, "Expected key"))
+      if key_part.type != TokenType.String {
+        let invalid_char = key_part.str.chars.find(fn (char) { valid_key_char?(char.byte(0)).false? })
+        if invalid_char.some? {
+          return Result.Error(Error.for_token(key_part, "Unexpected character: ${invalid_char.get}"))
+        }
+      }
+
+      key.push(key_part)
+
+      # Expect dot or end
+      match key_parts.next {
+        case Some(token) if token.str != "." -> return Result.Error(Error.for_token(key.last.get, "Expected '.'"))
+        case Some(token) -> prev_token = token
+        case None -> break
+      }
+    }
+
+    return Result.Ok(key)
+  }
+
+  fn static parse_key_value[I : mut + Iter[Token]](prev_token: Token, tokens: mut Peekable[Token, I]) -> Result[(Array[Token], TomlValue), Error] {
+    let key_parts: Array[Token] = []
+    loop {
+      match tokens.next {
+        case None -> return Result.Error(Error.for_token(key_parts.last.or(prev_token), "Expected '=' after key"))
+        case Some(token) if token.str == "=" -> break
+        case Some(token) -> key_parts.push(token.clone)
+      }
+    }
+
+    let value = try parse_value(prev_token.clone, mut tokens)
+    let key = try parse_key(prev_token, key_parts.iter.skip(0))
+    return Result.Ok((key, value))#Result.Ok(([Token(TokenType.String, "whoo", 0, 0)], TomlValue.String("eh")))
+  }
+
+  fn static parse_value[I : mut + Iter[Token]](prev_token: ref Token, tokens: mut Peekable[Token, I]) -> Result[TomlValue, Error] {
+    let first_part = try tokens.next.ok_or(Error.for_token(prev_token, "Expected value"))
+    let value: TomlValue = match (first_part.type, first_part.str) {
+      case (String, str) ->
+        TomlValue.String(str)
+
+      case (Other, "false") ->
+        TomlValue.Boolean(false)
+      case (Other, "true") ->
+        TomlValue.Boolean(true)
+
+      case (Other, str) if str.contains?('-') and str.starts_with?('-').false? -> {
+        let locale = Locale.new  # Parse methods require this though it won't affect anything
+        if str.size == 10 {
+          # Date only
+          let datetime = try DateTime.parse(str, "%Y-%m-%d", locale).ok_or(Error.for_token(first_part, "Unrecognized token '${str}'"))
+          TomlValue.Date(datetime.date)
+        } else if str.size == 19 {
+          # Date + Time
+          let datetime = try DateTime.parse(str, "%Y-%m-%dT%H:%M:%S", locale).ok_or(Error.for_token(first_part, "Unrecognized token '${str}'"))
+          TomlValue.DateTime(datetime)
+        } else {
+          # Date + Time + either milliseconds, timezone, or both
+          let datetime = try if str.contains?(".") {
+            DateTime.parse(str, "%Y-%m-%dT%H:%M:%S%f", locale).else(fn { DateTime.parse(str, "%Y-%m-%dT%H:%M:%S%f%z", locale) })
+          } else {
+            DateTime.parse(str, "%Y-%m-%dT%H:%M:%S%z", locale)
+          }.ok_or(Error.for_token(first_part, "Unrecognized token '${str}'"))
+          TomlValue.DateTime(datetime)
+        }
+      }
+
+      case (Other, str) if str.contains?(':') -> {
+        # Time only
+        let locale = Locale.new
+        let datetime = try if str.contains?(".") {
+          DateTime.parse(str, "%H:%M:%S", locale)
+        } else {
+          DateTime.parse(str, "%H:%M:%S%f", locale)
+        }.ok_or(Error.for_token(first_part, "Unrecognized token '${str}'"))
+        TomlValue.Time(datetime.time)
+      }
+
+      case (Other, "inf") or (Other, "+inf") ->
+        TomlValue.Float(Float.infinity)
+      case (Other, "-inf") -> 
+        TomlValue.Float(Float.negative_infinity)
+      case (Other, "nan") or (Other, "+nan") or (Other, "-nan") ->
+        TomlValue.Float(Float.not_a_number)
+      case (Other, str) if (str.contains?('.') or str.contains?('e') or str.contains?('E')) and str.ends_with?('.').false? -> {
+        let float_str = try remove_numeric_underscores(str).ok_or(Error.for_token(first_part, "Each underscore must be between two digits"))
+        let float = try Float.parse(float_str).ok_or(Error.for_token(first_part, "Unrecognized token '${str}'"))
+        TomlValue.Float(float)
+      }
+
+      case (Other, str) ->
+        TomlValue.Integer(try parse_int(str).ok_or(Error.for_token(first_part, "Unrecognized token '${str}'")))
+
+      case (Symbol, "[") ->
+        try parse_inline_array(first_part, mut tokens)
+      case (Symbol, "{") -> 
+        try parse_inline_table(first_part, mut tokens)
+      
+      case (Symbol, sym) ->
+        return Result.Error(Error.for_token(first_part, "Unexpected symbol '${sym}'"))
+    }
+
+    return Result.Ok(value)
+  }
+
+  fn static parse_int(str: String) -> Option[Int] {
+    let str = try remove_numeric_underscores(str)
+
+    let negative? = str.byte(0) == ascii.DASH
+    let str = if str.starts_with?('-') or str.starts_with?('+') { str.slice(1, str.size - 1).to_string } else { str }
+
+    let value = if str.starts_with?('0x') {
+      Int.parse(str, int.Format.Hex)
+    } else if str.starts_with?('0o') {
+      parse_octal(str.slice(2, str.size - 2))
+    } else if str.starts_with?('0b') {
+      Int.parse(str.slice(2, str.size - 2), int.Format.Binary)
+    } else {
+      Int.parse(str, int.Format.Decimal)
+    }
+
+    return value.map(fn (v) { if negative? { 0 - v } else { v } })
+  }
+
+  fn static parse_octal(bytes: ByteArray) -> Option[Int] {
+    let mut value = 0
+    for byte in bytes.iter {
+      if digit?(byte).false? { return Option.None }
+      value = (value * 8) + byte - ascii.ZERO
+    }
+    return Option.Some(value)
+  }
+
+  fn static parse_inline_array[I : mut + Iter[Token]](prev_token: Token, tokens: mut Peekable[Token, I]) -> Result[TomlValue, Error] {
+    let mut arr: Array[TomlValue] = []
+    let mut prev_token = prev_token
+    loop {
+      if (try tokens.peek.ok_or(Error.for_token(prev_token, "Mismatched bracket"))).str == ']' {
+        break
+      }
+
+      arr.push(try parse_value(prev_token, mut tokens))
+
+      let comma_or_end = try tokens.next.ok_or(Error.for_token(prev_token, "Mismatched bracket"))
+      if comma_or_end.str == ']' {
+        break
+      } else if comma_or_end.str != ',' {
+        return Result.Error(Error.for_token(comma_or_end, "Expected ',' or ']'"))
+      }
+      prev_token = comma_or_end
+    }
+
+    return Result.Ok(TomlValue.Array(arr))
+  }
+
+  fn static parse_inline_table[I : mut + Iter[Token]](prev_token: Token, tokens: mut Peekable[Token, I]) -> Result[TomlValue, Error] {
+    let mut table: Map[String, TomlValue] = Map.new
+    let mut prev_token = prev_token
+    loop {
+      if (try tokens.peek.ok_or(Error.for_token(prev_token, "Mismatched curly brace"))).str == '}' {
+        break
+      }
+
+      let key_value = try parse_key_value(prev_token, mut tokens)
+      prev_token = try add_to_table(mut table, key_value)
+
+      let comma_or_end = try tokens.next.ok_or(Error.for_token(prev_token, "Mismatched curly brace"))
+      if comma_or_end.str == '}' {
+        break
+      } else if comma_or_end.str != ',' {
+        return Result.Error(Error.for_token(comma_or_end, "Expected ',' or '}'"))
+      }
+
+      prev_token = comma_or_end
+    }
+    return Result.Ok(TomlValue.Table(table))
+  }
+
+  fn static add_to_table(table: mut Map[String, TomlValue], key_value: (Array[Token], TomlValue)) -> Result[Token, Error] {
+    return match key_value {
+      case (key, value) -> {
+        key.reverse()
+        let mut sub_table = mut table
+        while key.size > 1 {
+          let key_part = key.pop.get
+          match sub_table.opt_mut(key_part.str) {
+            case Some(Table(t)) -> sub_table = mut t
+            case Some(_) -> return Result.Error(Error.for_token(key_part, "Duplicate assignment of '${key_part.str}'"))
+            case None -> {
+              let new_sub_table = Map.new
+              sub_table = mut new_sub_table
+              sub_table.set(key_part.str, TomlValue.Table(new_sub_table))
+            }
+          }
+        }
+        if sub_table.set(key.get(0).str, value).some? {
+          return Result.Error(Error.for_token(key.get(0), "Duplicate assignment of '${key.get(0).str}'"))
+        }
+
+        Result.Ok(key.into_iter.next.get)
+      }
+    }
+  }
+
+  fn static remove_numeric_underscores(str: String) -> Option[String] {
+    let mut output = ByteArray.new
+    let mut prev_is_digit = false
+    let iter = str.bytes.peekable
+    loop {
+      let byte = match iter.next {
+        case Some(b) -> b
+        case None -> break
+      }
+
+      if byte == ascii.UNDERSCORE {
+        if (prev_is_digit and digit?(iter.peek.or(0))).false? {
+          return Option.None
+        }
+      } else {
+        output.push(byte)
+      }
+
+      prev_is_digit = digit?(byte)
+    }
+
+    return Option.Some(output.to_string)
+  }
+
+  fn inline static digit?(byte: Int) -> Bool {
+    byte >= ascii.ZERO and byte <= ascii.NINE
+  }
+
+  fn inline static valid_key_char?(c: Int) -> Bool {
+    # A-Za-z0-9_-
+    c == ascii.DASH or c == ascii.UNDERSCORE or (c >= ascii.ZERO and c <= ascii.NINE) or (c >= ascii.A and c <= ascii.Z) or (c >= ascii.LOWER_A and c <= ascii.LOWER_Z)
+  }
+
+  fn inline static is_symbol?(c: Int) -> Bool {
+    [ascii.COMMA, ascii.DOT, ascii.EQUAL, ascii.OPEN_BRACKET, ascii.CLOSE_BRACKET, ascii.OPEN_BRACE, ascii.CLOSE_BRACE].contains?(c)
+  }
+
+  fn static parse_unicode[I : Iter[(Int, Int)] + mut](bytes: mut I, num_digits: Int) -> Option[String] {
+    let mut digits: Array[Int] = []
+    for _ in 0.to(num_digits) {
+      digits.push(match try bytes.next {
+        case (_, c) if c >= ascii.ZERO and c <= ascii.NINE -> c - ascii.ZERO # 0-9
+        case (_, c) if c >= ascii.A and c <= ascii.F -> c - ascii.A + 10 # A-F
+        case (_, c) if c >= ascii.LOWER_A and c <= ascii.LOWER_F -> c - ascii.LOWER_A + 10 # a-f
+        case _ -> return Option.None
+      })
+    }
+
+    let mut output = ByteArray.new()
+    for i in 0.to(num_digits / 2) {
+      let a: Int = digits.get(i * 2)
+      let b: Int = digits.get(i * 2 + 1)
+      output.push((a << 4) + b)
+    }
+
+    return Option.Some(output.to_string)
+  }
+}

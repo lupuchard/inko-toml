@@ -1,0 +1,41 @@
+
+let pub BACKSPACE       = 0x08
+let pub TAB             = 0x09
+let pub LINE_FEED       = 0x0A
+let pub FORM_FEED       = 0x0C
+let pub CARRIAGE_RETURN = 0x0D
+let pub END             = 0x19
+
+let pub SPACE         = 0x20
+let pub DQUOTE        = 0x22
+let pub HASH          = 0x23
+let pub SQUOTE        = 0x27
+let pub PLUS          = 0x2B
+let pub COMMA         = 0x2C
+let pub DASH          = 0x2D
+let pub DOT           = 0x2E
+let pub COLON         = 0x3A
+let pub EQUAL         = 0x3D
+let pub BACKSLASH     = 0x5C
+let pub UNDERSCORE    = 0x5F
+let pub OPEN_BRACKET  = 0x5B
+let pub CLOSE_BRACKET = 0x5D
+let pub OPEN_BRACE    = 0x7B
+let pub CLOSE_BRACE   = 0x7D
+
+let pub ZERO = 0x30
+let pub NINE = 0x39
+
+let pub A = 0x41
+let pub F = 0x46
+let pub U = 0x55
+let pub Z = 0x5A
+
+let pub LOWER_A = 0x61
+let pub LOWER_B = 0x62
+let pub LOWER_F = 0x66
+let pub LOWER_N = 0x6E
+let pub LOWER_R = 0x0C
+let pub LOWER_T = 0x74
+let pub LOWER_U = 0x75
+let pub LOWER_Z = 0x7A
