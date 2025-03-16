@@ -23,8 +23,9 @@ let pub CLOSE_BRACKET = 0x5D
 let pub OPEN_BRACE    = 0x7B
 let pub CLOSE_BRACE   = 0x7D
 
-let pub ZERO = 0x30
-let pub NINE = 0x39
+let pub ZERO  = 0x30
+let pub SEVEN = 0x37
+let pub NINE  = 0x39
 
 let pub A = 0x41
 let pub F = 0x46

@@ -29,11 +29,12 @@ type async Main {
       case Float(float) -> toml_json_value("float", float.to_string)
       case Bool(bool) -> toml_json_value("bool", bool.to_string)
       case DateTime(datetime) -> toml_json_value("datetime", datetime.to_iso8601)
+      case DateTimeLocal(datetime) -> toml_json_value("datetime-local", datetime.to_iso8601)
       case Date(date) -> {
         toml_json_value("date-local", DateTime.new(date, DateTime.local.time, 0).format("%Y-%m-%d", Locale.new))
       }
       case Time(time) -> {
-        toml_json_value("time", DateTime.new(DateTime.local.date, time, 0).format("%H:%M:%S", Locale.new))
+        toml_json_value("time-local", DateTime.new(DateTime.local.date, time, 0).format("%H:%M:%S%f", Locale.new))
       }
       case Array(array) -> Json.Array(array.iter.map(fn (val) { toml_to_json(val.clone) }).to_array)
       case Table(table) -> {

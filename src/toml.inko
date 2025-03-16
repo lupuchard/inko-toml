@@ -11,6 +11,7 @@ type pub enum TomlValue {
   case Float(Float)
   case Bool(Bool)
   case DateTime(DateTime)
+  case DateTimeLocal(DateTime)
   case Date(Date)
   case Time(Time)
   case Array(Array[TomlValue])
@@ -49,6 +50,13 @@ impl TomlValue {
   fn date_time -> Option[ref DateTime] {
     match self {
       case DateTime(val) -> Option.Some(val)
+      case _ -> Option.None
+    }
+  }
+
+  fn date_time_local -> Option[ref DateTime] {
+    match self {
+      case DateTimeLocal(val) -> Option.Some(val)
       case _ -> Option.None
     }
   }
@@ -99,15 +107,16 @@ impl TomlValue {
 impl Equal for TomlValue {
   fn pub ==(other: ref TomlValue) -> Bool {
     match self {
-      case String(lhs)   -> match other { case String(rhs)   -> lhs == rhs case _ -> false }
-      case Int(lhs)      -> match other { case Int(rhs)      -> lhs == rhs case _ -> false }
-      case Float(lhs)    -> match other { case Float(rhs)    -> lhs == rhs case _ -> false }
-      case Bool(lhs)     -> match other { case Bool(rhs)     -> lhs == rhs case _ -> false }
-      case DateTime(lhs) -> match other { case DateTime(rhs) -> lhs == rhs case _ -> false }
-      case Date(lhs)     -> match other { case Date(rhs)     -> lhs == rhs case _ -> false }
-      case Time(lhs)     -> match other { case Time(rhs)     -> lhs == rhs case _ -> false }
-      case Array(lhs)    -> match other { case Array(rhs)    -> lhs == rhs case _ -> false }
-      case Table(lhs)    -> match other { case Table(rhs)    -> lhs == rhs case _ -> false }
+      case String(lhs)        -> match other { case String(rhs)        -> lhs == rhs case _ -> false }
+      case Int(lhs)           -> match other { case Int(rhs)           -> lhs == rhs case _ -> false }
+      case Float(lhs)         -> match other { case Float(rhs)         -> lhs == rhs case _ -> false }
+      case Bool(lhs)          -> match other { case Bool(rhs)          -> lhs == rhs case _ -> false }
+      case DateTime(lhs)      -> match other { case DateTime(rhs)      -> lhs == rhs case _ -> false }
+      case DateTimeLocal(lhs) -> match other { case DateTimeLocal(rhs) -> lhs == rhs case _ -> false }
+      case Date(lhs)          -> match other { case Date(rhs)          -> lhs == rhs case _ -> false }
+      case Time(lhs)          -> match other { case Time(rhs)          -> lhs == rhs case _ -> false }
+      case Array(lhs)         -> match other { case Array(rhs)         -> lhs == rhs case _ -> false }
+      case Table(lhs)         -> match other { case Table(rhs)         -> lhs == rhs case _ -> false }
     }
   }
 }
@@ -115,15 +124,16 @@ impl Equal for TomlValue {
 impl Format for TomlValue {
   fn pub fmt(formatter: mut Formatter) {
     match self {
-      case String(val)   -> formatter.write('"${val}"')
-      case Int(val)      -> val.fmt(formatter)
-      case Float(val)    -> val.fmt(formatter)
-      case Bool(val)     -> val.fmt(formatter)
-      case DateTime(val) -> val.fmt(formatter)
-      case Date(val)     -> val.fmt(formatter)
-      case Time(val)     -> val.fmt(formatter)
-      case Array(val)    -> val.fmt(formatter)
-      case Table(val)    -> val.fmt(formatter)
+      case String(val)        -> formatter.write('"${val}"')
+      case Int(val)           -> val.fmt(formatter)
+      case Float(val)         -> val.fmt(formatter)
+      case Bool(val)          -> val.fmt(formatter)
+      case DateTime(val)      -> val.fmt(formatter)
+      case DateTimeLocal(val) -> val.fmt(formatter)
+      case Date(val)          -> val.fmt(formatter)
+      case Time(val)          -> val.fmt(formatter)
+      case Array(val)         -> val.fmt(formatter)
+      case Table(val)         -> val.fmt(formatter)
     }
   }
 }
@@ -131,15 +141,16 @@ impl Format for TomlValue {
 impl Clone for TomlValue {
   fn pub clone() -> TomlValue {
     match self {
-      case String(val)   -> TomlValue.String(val)
-      case Int(val)      -> TomlValue.Int(val)
-      case Float(val)    -> TomlValue.Float(val)
-      case Bool(val)     -> TomlValue.Bool(val)
-      case DateTime(val) -> TomlValue.DateTime(val.clone())
-      case Date(val)     -> TomlValue.Date(val)
-      case Time(val)     -> TomlValue.Time(val)
-      case Array(val)    -> TomlValue.Array(val.clone())
-      case Table(val)    -> TomlValue.Table(val.clone())
+      case String(val)        -> TomlValue.String(val)
+      case Int(val)           -> TomlValue.Int(val)
+      case Float(val)         -> TomlValue.Float(val)
+      case Bool(val)          -> TomlValue.Bool(val)
+      case DateTime(val)      -> TomlValue.DateTime(val.clone())
+      case DateTimeLocal(val) -> TomlValue.DateTimeLocal(val.clone())
+      case Date(val)          -> TomlValue.Date(val)
+      case Time(val)          -> TomlValue.Time(val)
+      case Array(val)         -> TomlValue.Array(val.clone())
+      case Table(val)         -> TomlValue.Table(val.clone())
     }
   }
 }

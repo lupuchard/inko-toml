@@ -1,3 +1,4 @@
+import std.bytes (Slice)
 import std.clone (Clone)
 import std.stdio (Stdout)
 import std.cmp (Equal)
@@ -95,7 +96,7 @@ type pub Parser {
     let line_iter = Stream.new(fn move {
       let mut line = ByteArray.new
       loop {
-        match buffer.opt(buffer_idx) {
+        match buffer.get(buffer_idx).ok {
           case None -> {
             buffer.clear
             let amount_read = match file.read(buffer, 1024) {
@@ -142,14 +143,14 @@ type pub Parser {
         next
       }
 
-      if tokens.get(0).str == "(end)" {
+      if tokens.get(0).or_panic.str == "(end)" {
         break
-      } else if tokens.get(0).str == '[' {
-        if tokens.size > 1 and tokens.get(1).str == '[' {
+      } else if tokens.get(0).or_panic.str == '[' {
+        if tokens.size > 1 and tokens.get(1).or_panic.str == '[' {
           let key = try parse_array_header(tokens.clone)
           let array: mut Array[TomlValue] = match get_from_table(root_table, key.clone) {
             case Some(Array(array)) -> mut array
-            case Some(_) -> return Result.Error(Error.for_token(tokens.get(0), "Duplicate assignment of '${key.last.get.str}'"))
+            case Some(_) -> return Result.Error(Error.for_token(tokens.get(0).or_panic, "Duplicate assignment of '${key.last.get.str}'"))
             case None -> (try add_to_table(root_table, (key, TomlValue.Array([])))).array_mut.get
           }
 
@@ -160,12 +161,12 @@ type pub Parser {
           let key = try parse_table_header(tokens.clone)
           cur_table = match get_from_table(root_table, key.clone) {
             case Some(Table(table)) -> mut table
-            case Some(_) -> return Result.Error(Error.for_token(tokens.get(0), "Duplicate assignment of '${key.last.get.str}'"))
+            case Some(_) -> return Result.Error(Error.for_token(tokens.get(0).or_panic, "Duplicate assignment of '${key.last.get.str}'"))
             case None -> (try add_to_table(root_table, (key, TomlValue.Table(Map.new)))).table_mut.get
           }
         }
       } else {
-        let first_token = tokens.get(0).clone
+        let first_token = tokens.get(0).or_panic.clone
         let key_value = try parse_key_value(first_token, tokens.into_iter.peekable)
         try add_to_table(mut cur_table, key_value)
       }
@@ -212,7 +213,7 @@ type pub Parser {
         }
         case (col, ascii.DQUOTE) -> {
           let mut multiline = false
-          if arr.size > (col + 2) and arr.get(col + 1) == ascii.DQUOTE and arr.get(col + 2) == ascii.DQUOTE {
+          if arr.size > (col + 2) and arr.get(col + 1).or_panic == ascii.DQUOTE and arr.get(col + 2).or_panic == ascii.DQUOTE {
             bytes.next bytes.next
             multiline = true
           }
@@ -253,9 +254,9 @@ type pub Parser {
               }
             } else if pair.1 == ascii.DQUOTE {
               if multiline {
-                if arr.size > (pair.0 + 2) and arr.get(pair.0 + 1) == ascii.DQUOTE and arr.get(pair.0 + 2) == ascii.DQUOTE {
+                if arr.size > (pair.0 + 2) and arr.get(pair.0 + 1).or_panic == ascii.DQUOTE and arr.get(pair.0 + 2).or_panic == ascii.DQUOTE {
                   bytes.next bytes.next
-                  tokens.push(Token(TokenType.String, str.to_string, line_num, col))
+                  tokens.push(Token(TokenType.String, str.to_string.trim_start, line_num, col))
                   break
                 } else {
                   str.push_byte(ascii.DQUOTE)
@@ -271,7 +272,7 @@ type pub Parser {
         }
         case (col, ascii.SQUOTE) ->  {
           let mut multiline = false
-          if arr.size > (col + 2) and arr.get(col + 1) == ascii.SQUOTE and arr.get(col + 2) == ascii.SQUOTE {
+          if arr.size > (col + 2) and arr.get(col + 1).or_panic == ascii.SQUOTE and arr.get(col + 2).or_panic == ascii.SQUOTE {
             bytes.next bytes.next
             multiline = true
           }
@@ -298,7 +299,7 @@ type pub Parser {
 
             if pair.1 == ascii.SQUOTE {
               if multiline {
-                if arr.size > (pair.0 + 2) and arr.get(pair.0 + 1) == ascii.SQUOTE and arr.get(pair.0 + 2) == ascii.SQUOTE {
+                if arr.size > (pair.0 + 2) and arr.get(pair.0 + 1).or_panic == ascii.SQUOTE and arr.get(pair.0 + 2).or_panic == ascii.SQUOTE {
                   bytes.next bytes.next
                   tokens.push(Token(TokenType.String, str.to_string, line_num, col))
                   break
@@ -360,7 +361,7 @@ type pub Parser {
       return Result.Error(Error.for_token(last_token, "Expected ']' at end of table header"))
     }
 
-    return Result.Ok(try parse_key(tokens.get(0).clone, tokens.iter.skip(1)))
+    return Result.Ok(try parse_key(tokens.get(0).or_panic.clone, tokens.iter.skip(1)))
   }
 
   fn static parse_array_header(tokens: Array[Token]) -> Result[Array[Token], Error] {
@@ -371,7 +372,7 @@ type pub Parser {
       }
     }
 
-    return Result.Ok(try parse_key(tokens.get(0).clone, tokens.iter.skip(2)))
+    return Result.Ok(try parse_key(tokens.get(0).or_panic.clone, tokens.iter.skip(2)))
   }
 
   fn static parse_key(prev_token: Token, tokens: Stream[ref Token]) -> Result[Array[Token], Error] {
@@ -394,7 +395,7 @@ type pub Parser {
       # Expect key
       let key_part = try key_parts.next.ok_or(Error.for_token(prev_token, "Expected key"))
       if key_part.type != TokenType.String {
-        let invalid_char = key_part.str.chars.find(fn (char) { valid_key_char?(char.byte(0)).false? })
+        let invalid_char = key_part.str.chars.find(fn (char) { valid_key_char?(char.get(0).or_panic).false? })
         if invalid_char.some? {
           return Result.Error(Error.for_token(key_part, "Unexpected character: ${invalid_char.get}"))
         }
@@ -440,6 +441,11 @@ type pub Parser {
         TomlValue.Bool(true)
 
       case (Other, str) if str.contains?('-') and str.starts_with?('-').false? -> {
+        let mut str = str.to_upper
+        if tokens.peek.some? and tokens.peek.get.type == TokenType.Other {
+          str += "T" + tokens.next.get.str
+        }
+
         let locale = Locale.new  # Parse methods require this though it won't affect anything
         if str.size == 10 {
           # Date only
@@ -448,15 +454,21 @@ type pub Parser {
         } else if str.size == 19 {
           # Date + Time
           let datetime = try DateTime.parse(str, "%Y-%m-%dT%H:%M:%S", locale).ok_or(Error.for_token(first_part, "Unrecognized token '${str}'"))
-          TomlValue.DateTime(datetime)
+          TomlValue.DateTimeLocal(datetime)
         } else {
           # Date + Time + either milliseconds, timezone, or both
-          let datetime = try if str.contains?(".") {
-            DateTime.parse(str, "%Y-%m-%dT%H:%M:%S%f", locale).else(fn { DateTime.parse(str, "%Y-%m-%dT%H:%M:%S%f%z", locale) })
+          let datetime = if str.contains?(".") {
+            DateTime.parse(str, "%Y-%m-%dT%H:%M:%S%f%z", locale)
           } else {
             DateTime.parse(str, "%Y-%m-%dT%H:%M:%S%z", locale)
-          }.ok_or(Error.for_token(first_part, "Unrecognized token '${str}'"))
-          TomlValue.DateTime(datetime)
+          }
+          
+          if datetime.none? {
+            let datetime = try DateTime.parse(str, "%Y-%m-%dT%H:%M:%S%f", locale).ok_or(Error.for_token(first_part, "Unrecognized token '${str}'"))
+            TomlValue.DateTimeLocal(datetime)
+          } else {
+            TomlValue.DateTime(datetime.get)
+          }
         }
       }
 
@@ -464,9 +476,9 @@ type pub Parser {
         # Time only
         let locale = Locale.new
         let datetime = try if str.contains?(".") {
-          DateTime.parse(str, "%H:%M:%S", locale)
-        } else {
           DateTime.parse(str, "%H:%M:%S%f", locale)
+        } else {
+          DateTime.parse(str, "%H:%M:%S", locale)
         }.ok_or(Error.for_token(first_part, "Unrecognized token '${str}'"))
         TomlValue.Time(datetime.time)
       }
@@ -477,7 +489,7 @@ type pub Parser {
         TomlValue.Float(Float.negative_infinity)
       case (Other, "nan") or (Other, "+nan") or (Other, "-nan") ->
         TomlValue.Float(Float.not_a_number)
-      case (Other, str) if (str.contains?('.') or str.contains?('e') or str.contains?('E')) and str.ends_with?('.').false? -> {
+      case (Other, str) if (str.contains?('.') or str.contains?('e') or str.contains?('E')) and str.ends_with?('.').false? and str.contains?('x').false? -> {
         let float_str = try remove_numeric_underscores(str).ok_or(Error.for_token(first_part, "Each underscore must be between two digits"))
         let float = try Float.parse(float_str).ok_or(Error.for_token(first_part, "Unrecognized token '${str}'"))
         TomlValue.Float(float)
@@ -501,8 +513,15 @@ type pub Parser {
   fn static parse_int(str: String) -> Option[Int] {
     let str = try remove_numeric_underscores(str)
 
-    let negative? = str.byte(0) == ascii.DASH
-    let str = if str.starts_with?('-') or str.starts_with?('+') { str.slice(1, str.size - 1).to_string } else { str }
+    if str == "-9223372036854775808"
+    or str == "-0x8000000000000000"
+    or str == "-0o1000000000000000000000"
+    or str == "-0b1000000000000000000000000000000000000000000000000000000000000000" {
+      return Option.Some(-9223372036854775808)
+    }
+
+    let negative? = str.get(0).or_panic == ascii.DASH
+    let str = if str.starts_with?('-') or str.starts_with?('+') { str.slice(1, str.size).to_string } else { str }
 
     let value = if str.starts_with?('0x') {
       Int.parse(str, int.Format.Hex)
@@ -517,10 +536,10 @@ type pub Parser {
     return value.map(fn (v) { if negative? { 0 - v } else { v } })
   }
 
-  fn static parse_octal(bytes: ByteArray) -> Option[Int] {
+  fn static parse_octal(bytes: Slice[String]) -> Option[Int] {
     let mut value = 0
-    for byte in bytes.iter {
-      if digit?(byte).false? { return Option.None }
+    for byte in bytes {
+      if byte < ascii.ZERO or byte > ascii.SEVEN { return Option.None }
       value = (value * 8) + byte - ascii.ZERO
     }
     return Option.Some(value)
@@ -580,7 +599,7 @@ type pub Parser {
         let mut sub_table = mut table
         while key.size > 1 {
           let key_part = key.pop.get
-          match sub_table.opt_mut(key_part.str) {
+          match sub_table.get_mut(key_part.str).ok {
             case Some(Table(t)) -> sub_table = mut t
             case Some(Array(arr)) -> match arr.last_mut {
               case Some(Table(t)) -> sub_table = mut t
@@ -589,18 +608,18 @@ type pub Parser {
             case Some(_) -> return Result.Error(Error.for_token(key_part, "Duplicate assignment of '${key_part.str}'"))
             case None -> {
               sub_table.set(key_part.str, TomlValue.Table(Map.new))
-              sub_table = sub_table.get_mut(key_part.str).table_mut.get
+              sub_table = sub_table.get_mut(key_part.str).or_panic.table_mut.get
             }
           }
         }
         
-        let prev = sub_table.set(key.get(0).str, value)
+        let prev = sub_table.set(key.get(0).or_panic.str, value)
         if prev.some? {
           # drop(sub_table)
           drop(prev)
-          Result.Error(Error.for_token(key.get(0), "Duplicate assignment of '${key.get(0).str}'"))
+          Result.Error(Error.for_token(key.get(0).or_panic, "Duplicate assignment of '${key.get(0).or_panic.str}'"))
         } else {
-          Result.Ok(sub_table.get_mut(key.get(0).str))
+          Result.Ok(sub_table.get_mut(key.get(0).or_panic.str).or_panic)
         }
       }
     }
@@ -613,13 +632,13 @@ type pub Parser {
     let mut sub_table = mut table
     while key.size > 1 {
       let key_part = key.pop.get
-      match sub_table.opt_mut(key_part.str) {
+      match sub_table.get_mut(key_part.str).ok {
         case Some(Table(t)) -> sub_table = mut t
         case _ -> return Option.None
       }
     }
 
-    return sub_table.opt_mut(key.get(0).str)
+    return sub_table.get_mut(key.get(0).or_panic.str).ok
   }
 
   fn static remove_numeric_underscores(str: String) -> Option[String] {
@@ -647,7 +666,7 @@ type pub Parser {
   }
 
   fn inline static digit?(byte: Int) -> Bool {
-    byte >= ascii.ZERO and byte <= ascii.NINE
+    (byte >= ascii.ZERO and byte <= ascii.NINE) or (byte >= ascii.LOWER_A and byte <= ascii.LOWER_F) or (byte >= ascii.A and byte <= ascii.F)
   }
 
   fn inline static valid_key_char?(c: Int) -> Bool {
@@ -672,8 +691,8 @@ type pub Parser {
 
     let mut output = ByteArray.new()
     for i in 0.until(num_digits / 2) {
-      let a: Int = digits.get(i * 2)
-      let b: Int = digits.get(i * 2 + 1)
+      let a: Int = digits.get(i * 2).or_panic
+      let b: Int = digits.get(i * 2 + 1).or_panic
       output.push((a << 4) + b)
     }
 
