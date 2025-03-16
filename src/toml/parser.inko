@@ -1,7 +1,8 @@
 import std.clone (Clone)
 import std.stdio (Stdout)
 import std.cmp (Equal)
-import std.fmt (Format, Formatter)
+import std.drop (drop)
+import std.fmt (Format, Formatter, fmt)
 import std.fs.file (ReadOnlyFile)
 import std.int
 import std.io (Error as IoError)
@@ -136,13 +137,6 @@ type pub Parser {
 
     loop {
       let tokens: Array[Token] = try tokenize_line(mut line_iter)
-
-      #let out = Stdout.new
-      #out.print("Tokens:")
-      #for i in 0.until(tokens.size) {
-      #  out.write_string("'${tokens.get(i).str}' ")
-      #}
-      #out.write_string("\n")
       
       if tokens.empty? {
         next
@@ -153,7 +147,7 @@ type pub Parser {
       } else if tokens.get(0).str == '[' {
         if tokens.size > 1 and tokens.get(1).str == '[' {
           let key = try parse_array_header(tokens.clone)
-          let array = match get_from_table(root_table, key.clone) {
+          let array: mut Array[TomlValue] = match get_from_table(root_table, key.clone) {
             case Some(Array(array)) -> mut array
             case Some(_) -> return Result.Error(Error.for_token(tokens.get(0), "Duplicate assignment of '${key.last.get.str}'"))
             case None -> (try add_to_table(root_table, (key, TomlValue.Array([])))).array_mut.get
@@ -164,7 +158,11 @@ type pub Parser {
           array.push(TomlValue.Table(new_table))
         } else {
           let key = try parse_table_header(tokens.clone)
-          cur_table = (try add_to_table(root_table, (key, TomlValue.Table(Map.new)))).table_mut.get
+          cur_table = match get_from_table(root_table, key.clone) {
+            case Some(Table(table)) -> mut table
+            case Some(_) -> return Result.Error(Error.for_token(tokens.get(0), "Duplicate assignment of '${key.last.get.str}'"))
+            case None -> (try add_to_table(root_table, (key, TomlValue.Table(Map.new)))).table_mut.get
+          }
         }
       } else {
         let first_token = tokens.get(0).clone
@@ -189,17 +187,17 @@ type pub Parser {
           case None -> return Result.Ok(tokens)
           case Some((_, Error(io_error))) -> return Result.Error(Error.from_io(io_error))
           case Some((index, Ok(line))) -> {
-            let tmp = line.into_byte_array # Temporary needed or the array will be dropped before the iterator
-            bytes = tmp.iter.with_index.peekable
-            arr = tmp
+            drop(bytes)
+            arr = line.into_byte_array
+            bytes = arr.iter.with_index.peekable
             index
           }
         }
       }
 
       let mut pair = match bytes.next {
+        case Some((_, ascii.HASH)) or None if bracket_stack.empty? -> return Result.Ok(tokens)
         case Some((col, c)) -> (col, c)
-        case None if bracket_stack.empty? -> return Result.Ok(tokens)
         case None -> {
           line_num = -1
           next
@@ -213,11 +211,35 @@ type pub Parser {
           next
         }
         case (col, ascii.DQUOTE) -> {
+          let mut multiline = false
+          if arr.size > (col + 2) and arr.get(col + 1) == ascii.DQUOTE and arr.get(col + 2) == ascii.DQUOTE {
+            bytes.next bytes.next
+            multiline = true
+          }
+
           let str = StringBuffer.new
           loop {
-            pair = try bytes.next.ok_or(Error.new(line_num, col, "No end of string"))
+            pair = match bytes.next {
+              case Some(pair) -> pair
+              case None if multiline -> {
+                line_num = match line_iter.next {
+                  case None -> return Result.Error(Error.new(line_num, col, "No end of multi-line string"))
+                  case Some((_, Error(io_error))) -> return Result.Error(Error.from_io(io_error))
+                  case Some((index, Ok(line))) -> {
+                    drop(bytes)
+                    arr = line.into_byte_array
+                    bytes = arr.iter.with_index.peekable
+                    str.push("\n")
+                    index
+                  }
+                }
+                next
+              }
+              case None -> return Result.Error(Error.new(line_num, col, "No end of string"))
+            }
+
             if pair.1 == ascii.BACKSLASH {
-              match try bytes.next.ok_or(Error.new(line_num, pair.0, "No end of string")) {
+              match try bytes.next.ok_or(Error.new(line_num, pair.0, "Expected character after escape")) {
                 case (_, ascii.LOWER_B) -> str.push_byte(ascii.BACKSPACE)
                 case (_, ascii.LOWER_T) -> str.push("\t")
                 case (_, ascii.LOWER_N) -> str.push("\n")
@@ -230,19 +252,63 @@ type pub Parser {
                 case (col, c) -> return Result.Error(Error.new(line_num, col, "Invalid escape: \\${ByteArray.from_array([c])}"))
               }
             } else if pair.1 == ascii.DQUOTE {
-              tokens.push(Token(TokenType.String, str.to_string, line_num, col))
-              break
+              if multiline {
+                if arr.size > (pair.0 + 2) and arr.get(pair.0 + 1) == ascii.DQUOTE and arr.get(pair.0 + 2) == ascii.DQUOTE {
+                  bytes.next bytes.next
+                  tokens.push(Token(TokenType.String, str.to_string, line_num, col))
+                  break
+                } else {
+                  str.push_byte(ascii.DQUOTE)
+                }
+              } else {
+                tokens.push(Token(TokenType.String, str.to_string, line_num, col))
+                break
+              }
+            } else {
+              str.push_byte(pair.1)
             }
-            str.push_byte(pair.1)
           }
         }
         case (col, ascii.SQUOTE) ->  {
+          let mut multiline = false
+          if arr.size > (col + 2) and arr.get(col + 1) == ascii.SQUOTE and arr.get(col + 2) == ascii.SQUOTE {
+            bytes.next bytes.next
+            multiline = true
+          }
+
           let str = StringBuffer.new
           loop {
-            pair = try bytes.next.ok_or(Error.new(line_num, col, "No end of string"))
+            pair = match bytes.next {
+              case Some(pair) -> pair
+              case None if multiline -> {
+                line_num = match line_iter.next {
+                  case None -> return Result.Error(Error.new(line_num, col, "No end of multi-line string"))
+                  case Some((_, Error(io_error))) -> return Result.Error(Error.from_io(io_error))
+                  case Some((index, Ok(line))) -> {
+                    drop(bytes)
+                    arr = line.into_byte_array
+                    bytes = arr.iter.with_index.peekable
+                    index
+                  }
+                }
+                next
+              }
+              case None -> return Result.Error(Error.new(line_num, col, "No end of string"))
+            }
+
             if pair.1 == ascii.SQUOTE {
-              tokens.push(Token(TokenType.String, str.to_string, line_num, col))
-              break
+              if multiline {
+                if arr.size > (pair.0 + 2) and arr.get(pair.0 + 1) == ascii.SQUOTE and arr.get(pair.0 + 2) == ascii.SQUOTE {
+                  bytes.next bytes.next
+                  tokens.push(Token(TokenType.String, str.to_string, line_num, col))
+                  break
+                } else {
+                  str.push_byte(ascii.SQUOTE)
+                }
+              } else {
+                tokens.push(Token(TokenType.String, str.to_string, line_num, col))
+                break
+              }
             }
             str.push_byte(pair.1)
           }
@@ -522,18 +588,19 @@ type pub Parser {
             }
             case Some(_) -> return Result.Error(Error.for_token(key_part, "Duplicate assignment of '${key_part.str}'"))
             case None -> {
-              let new_sub_table = Map.new
-              sub_table = mut new_sub_table
-              sub_table.set(key_part.str, TomlValue.Table(new_sub_table))
+              sub_table.set(key_part.str, TomlValue.Table(Map.new))
+              sub_table = sub_table.get_mut(key_part.str).table_mut.get
             }
           }
         }
         
-        let value_ref = mut value
-        if sub_table.set(key.get(0).str, value).some? {
+        let prev = sub_table.set(key.get(0).str, value)
+        if prev.some? {
+          # drop(sub_table)
+          drop(prev)
           Result.Error(Error.for_token(key.get(0), "Duplicate assignment of '${key.get(0).str}'"))
         } else {
-          Result.Ok(value_ref)
+          Result.Ok(sub_table.get_mut(key.get(0).str))
         }
       }
     }
