@@ -1,5 +1,5 @@
 import std.string (StringBuffer)
-import std.iter (Iter, Stream)
+import std.iter (Stream)
 
 impl StringBuffer {
   fn pub inline mut push_byte(byte: Int) {

@@ -1,5 +1,6 @@
 
 import std.stdio (Stdin, Stdout)
+import std.sys
 import std.json (Json)
 import std.time (DateTime)
 import std.locale.en (Locale)
@@ -13,7 +14,7 @@ type async Main {
     let toml_table = match from_string(bytes.to_string) {
       case Error(error) -> {
         let _ = Stdout.new.print("${error.line}:${error.column} error: ${error.desc}")
-        return
+        sys.exit(1)
       }
       case Ok(table) -> table
     }
@@ -23,16 +24,16 @@ type async Main {
 
   fn toml_to_json(toml: TomlValue) -> Json {
     match toml {
-      case String(str) -> Json.String(str)
-      case Integer(int) -> Json.Int(int)
-      case Float(float) -> Json.Float(float)
-      case Boolean(bool) -> Json.Bool(bool)
-      case DateTime(datetime) -> Json.String(datetime.to_iso8601)
+      case String(str) -> toml_json_value("string", str)
+      case Int(int) -> toml_json_value("integer", int.to_string)
+      case Float(float) -> toml_json_value("float", float.to_string)
+      case Bool(bool) -> toml_json_value("bool", bool.to_string)
+      case DateTime(datetime) -> toml_json_value("datetime", datetime.to_iso8601)
       case Date(date) -> {
-        Json.String(DateTime.new(date, DateTime.local.time, 0).format("%H:%M:%S", Locale.new))
+        toml_json_value("date", DateTime.new(date, DateTime.local.time, 0).format("%H:%M:%S", Locale.new))
       }
       case Time(time) -> {
-        Json.String(DateTime.new(DateTime.local.date, time, 0).format("%Y-%m-%d", Locale.new))
+        toml_json_value("time", DateTime.new(DateTime.local.date, time, 0).format("%Y-%m-%d", Locale.new))
       }
       case Array(array) -> Json.Array(array.iter.map(fn (val) { toml_to_json(val.clone) }).to_array)
       case Table(table) -> {
@@ -44,36 +45,11 @@ type async Main {
       }
     }
   }
+
+  fn toml_json_value(type_name: String, value: String) -> Json {
+    let map: Map[String, Json] = Map.new
+    map.set("type", Json.String(type_name))
+    map.set("value", Json.String(value))
+    return Json.Object(map)
+  }
 }
-
-# case (Other, str) if str.contains?('-') and str.starts_with?('-').false? -> {
-#         let locale = Locale.new  # Parse methods require this though it won't affect anything
-#         if str.size == 10 {
-#           # Date only
-#           let datetime = try DateTime.parse(str, "%Y-%m-%d", locale).ok_or(Error.for_token(first_part, "Unrecognized token '${str}'"))
-#           TomlValue.Date(datetime.date)
-#         } else if str.size == 19 {
-#           # Date + Time
-#           let datetime = try DateTime.parse(str, "%Y-%m-%dT%H:%M:%S", locale).ok_or(Error.for_token(first_part, "Unrecognized token '${str}'"))
-#           TomlValue.DateTime(datetime)
-#         } else {
-#           # Date + Time + either milliseconds, timezone, or both
-#           let datetime = try if str.contains?(".") {
-#             DateTime.parse(str, "%Y-%m-%dT%H:%M:%S%f", locale).else(fn { DateTime.parse(str, "%Y-%m-%dT%H:%M:%S%f%z", locale) })
-#           } else {
-#             DateTime.parse(str, "%Y-%m-%dT%H:%M:%S%z", locale)
-#           }.ok_or(Error.for_token(first_part, "Unrecognized token '${str}'"))
-#           TomlValue.DateTime(datetime)
-#         }
-#       }
-
-#       case (Other, str) if str.contains?(':') -> {
-#         # Time only
-#         let locale = Locale.new
-#         let datetime = try if str.contains?(".") {
-#           DateTime.parse(str, "%H:%M:%S", locale)
-#         } else {
-#           DateTime.parse(str, "%H:%M:%S%f", locale)
-#         }.ok_or(Error.for_token(first_part, "Unrecognized token '${str}'"))
-#         TomlValue.Time(datetime.time)
-#       }

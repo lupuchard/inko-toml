@@ -7,9 +7,9 @@ import toml.parser (Parser, Error)
 
 type pub enum TomlValue {
   case String(String)
-  case Integer(Int)
+  case Int(Int)
   case Float(Float)
-  case Boolean(Bool)
+  case Bool(Bool)
   case DateTime(DateTime)
   case Date(Date)
   case Time(Time)
@@ -17,13 +17,92 @@ type pub enum TomlValue {
   case Table(Map[String, TomlValue])
 }
 
+impl TomlValue {
+  fn string -> Option[String] {
+    match self {
+      case String(val) -> Option.Some(val)
+      case _ -> Option.None
+    }
+  }
+
+  fn int -> Option[Int] {
+    match self {
+      case Int(val) -> Option.Some(val)
+      case _ -> Option.None
+    }
+  }
+
+  fn float -> Option[Float] {
+    match self {
+      case Float(val) -> Option.Some(val)
+      case _ -> Option.None
+    }
+  }
+
+  fn bool -> Option[Bool] {
+    match self {
+      case Bool(val) -> Option.Some(val)
+      case _ -> Option.None
+    }
+  }
+
+  fn date_time -> Option[ref DateTime] {
+    match self {
+      case DateTime(val) -> Option.Some(val)
+      case _ -> Option.None
+    }
+  }
+
+  fn date -> Option[Date] {
+    match self {
+      case Date(val) -> Option.Some(val)
+      case _ -> Option.None
+    }
+  }
+
+  fn time -> Option[Time] {
+    match self {
+      case Time(val) -> Option.Some(val)
+      case _ -> Option.None
+    }
+  }
+
+  fn array -> Option[ref Array[TomlValue]] {
+    match self {
+      case Array(val) -> Option.Some(val)
+      case _ -> Option.None
+    }
+  }
+
+  fn mut array_mut -> Option[mut Array[TomlValue]] {
+    match self {
+      case Array(val) -> Option.Some(val)
+      case _ -> Option.None
+    }
+  }
+
+  fn table -> Option[ref Map[String, TomlValue]] {
+    match self {
+      case Table(val) -> Option.Some(val)
+      case _ -> Option.None
+    }
+  }
+
+  fn mut table_mut -> Option[mut Map[String, TomlValue]] {
+    match self {
+      case Table(val) -> Option.Some(val)
+      case _ -> Option.None
+    }
+  }
+}
+
 impl Equal for TomlValue {
   fn pub ==(other: ref TomlValue) -> Bool {
     match self {
       case String(lhs)   -> match other { case String(rhs)   -> lhs == rhs case _ -> false }
-      case Integer(lhs)  -> match other { case Integer(rhs)  -> lhs == rhs case _ -> false }
+      case Int(lhs)      -> match other { case Int(rhs)      -> lhs == rhs case _ -> false }
       case Float(lhs)    -> match other { case Float(rhs)    -> lhs == rhs case _ -> false }
-      case Boolean(lhs)  -> match other { case Boolean(rhs)  -> lhs == rhs case _ -> false }
+      case Bool(lhs)     -> match other { case Bool(rhs)     -> lhs == rhs case _ -> false }
       case DateTime(lhs) -> match other { case DateTime(rhs) -> lhs == rhs case _ -> false }
       case Date(lhs)     -> match other { case Date(rhs)     -> lhs == rhs case _ -> false }
       case Time(lhs)     -> match other { case Time(rhs)     -> lhs == rhs case _ -> false }
@@ -37,9 +116,9 @@ impl Format for TomlValue {
   fn pub fmt(formatter: mut Formatter) {
     match self {
       case String(val)   -> formatter.write('"${val}"')
-      case Integer(val)  -> val.fmt(formatter)
+      case Int(val)      -> val.fmt(formatter)
       case Float(val)    -> val.fmt(formatter)
-      case Boolean(val)  -> val.fmt(formatter)
+      case Bool(val)     -> val.fmt(formatter)
       case DateTime(val) -> val.fmt(formatter)
       case Date(val)     -> val.fmt(formatter)
       case Time(val)     -> val.fmt(formatter)
@@ -53,9 +132,9 @@ impl Clone for TomlValue {
   fn pub clone() -> TomlValue {
     match self {
       case String(val)   -> TomlValue.String(val)
-      case Integer(val)  -> TomlValue.Integer(val)
+      case Int(val)      -> TomlValue.Int(val)
       case Float(val)    -> TomlValue.Float(val)
-      case Boolean(val)  -> TomlValue.Boolean(val)
+      case Bool(val)     -> TomlValue.Bool(val)
       case DateTime(val) -> TomlValue.DateTime(val.clone())
       case Date(val)     -> TomlValue.Date(val)
       case Time(val)     -> TomlValue.Time(val)
