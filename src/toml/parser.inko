@@ -217,7 +217,7 @@ type pub Parser {
         case (col, ascii.DQUOTE) -> {
           let mut multiline = false
           let mut empty_line = false
-          let mut skip_newline = false
+          let mut escape_newline = false
           if arr.size > (col + 2) and arr.get(col + 1).or_panic == ascii.DQUOTE and arr.get(col + 2).or_panic == ascii.DQUOTE {
             bytes.next bytes.next
             multiline = true
@@ -235,17 +235,16 @@ type pub Parser {
                     drop(bytes)
                     arr = line.into_byte_array
                     bytes = arr.iter.with_index.peekable
-                    if skip_newline {
+                    if escape_newline {
                       loop {
                         match bytes.peek {
-                          case Some((_, ascii.TAB)) or Some((_, ascii.SPACE)) -> bytes.next
+                          case Some((_, c)) if is_whitespace?(c) -> bytes.next
                           case _ -> break
                         }
                       }
                     } else if empty_line.false? {
                       str.push(ascii.LINE_FEED)
                     }
-                    skip_newline = false
                     empty_line = true
                     index
                   }
@@ -266,38 +265,43 @@ type pub Parser {
                 case Some((_, ascii.BACKSLASH)) -> str.push(ascii.BACKSLASH)
                 case Some((col, ascii.LOWER_U)) -> str.append(try parse_unicode(bytes, 4).ok_or(Error.new(line_num, col, "Invalid unicode escape")))
                 case Some((col, ascii.U)) -> str.append(try parse_unicode(bytes, 8).ok_or(Error.new(line_num, col, "Invalid unicode escape")))
+                case Some((_, c)) if is_whitespace?(c) and multiline -> escape_newline = true
                 case Some((col, c)) -> return Result.Error(Error.new(line_num, col, "Invalid escape: \\${ByteArray.from_array([c])}"))
                 case None -> {
                   if multiline.false? {
                     return Result.Error(Error.new(line_num, pair.0, "Expected character after escape"))
                   } else {
-                    skip_newline = true
+                    escape_newline = true
                   }
                 }
               }
             } else if pair.1 == ascii.DQUOTE {
               if multiline {
-                if arr.size > (pair.0 + 2) and arr.get(pair.0 + 1).or_panic == ascii.DQUOTE and arr.get(pair.0 + 2).or_panic == ascii.DQUOTE {
-                  bytes.next bytes.next
+                let mut quotes_in_row = chars_in_row(ascii.DQUOTE, arr, pair.0)
+                bytes = bytes.skip(quotes_in_row - 1).peekable
+                if quotes_in_row < 3 {
+                  for _ in 0.until(quotes_in_row) { str.push(ascii.DQUOTE) }
+                } else if quotes_in_row >= 3 {
+                  for _ in 0.until(quotes_in_row - 3) { str.push(ascii.DQUOTE) }
                   tokens.push(Token(TokenType.String, str.to_string.trim_start, line_num, col))
                   break
-                } else {
-                  str.push(ascii.DQUOTE)
                 }
               } else {
                 tokens.push(Token(TokenType.String, str.to_string, line_num, col))
                 break
               }
-            } else if (pair.1 == ascii.SPACE or pair.1 == ascii.TAB) and empty_line {
-
+            } else if is_whitespace?(pair.1) and (empty_line or escape_newline) {
+              if escape_newline.false? { str.push(pair.1) }
             } else {
               empty_line = false
+              escape_newline = false
               str.push(pair.1)
             }
           }
         }
         case (col, ascii.SQUOTE) ->  {
           let mut multiline = false
+          let mut first_line = true
           if arr.size > (col + 2) and arr.get(col + 1).or_panic == ascii.SQUOTE and arr.get(col + 2).or_panic == ascii.SQUOTE {
             bytes.next bytes.next
             multiline = true
@@ -315,6 +319,11 @@ type pub Parser {
                     drop(bytes)
                     arr = line.into_byte_array
                     bytes = arr.iter.with_index.peekable
+                    if first_line {
+                      first_line = false
+                    } else {
+                      str.push(ascii.LINE_FEED)
+                    }
                     index
                   }
                 }
@@ -325,19 +334,22 @@ type pub Parser {
 
             if pair.1 == ascii.SQUOTE {
               if multiline {
-                if arr.size > (pair.0 + 2) and arr.get(pair.0 + 1).or_panic == ascii.SQUOTE and arr.get(pair.0 + 2).or_panic == ascii.SQUOTE {
-                  bytes.next bytes.next
-                  tokens.push(Token(TokenType.String, str.to_string, line_num, col))
+                let mut quotes_in_row = chars_in_row(ascii.SQUOTE, arr, pair.0)
+                bytes = bytes.skip(quotes_in_row - 1).peekable
+                if quotes_in_row < 3 {
+                  for _ in 0.until(quotes_in_row) { str.push(ascii.SQUOTE) }
+                } else if quotes_in_row >= 3 {
+                  for _ in 0.until(quotes_in_row - 3) { str.push(ascii.SQUOTE) }
+                  tokens.push(Token(TokenType.String, str.to_string.trim_start, line_num, col))
                   break
-                } else {
-                  str.push(ascii.SQUOTE)
                 }
               } else {
                 tokens.push(Token(TokenType.String, str.to_string, line_num, col))
                 break
               }
+            } else {
+              str.push(pair.1)
             }
-            str.push(pair.1)
           }
         }
         case (col, c) if c == ascii.OPEN_BRACE or c == ascii.OPEN_BRACKET -> {
@@ -379,6 +391,15 @@ type pub Parser {
         case (col, c) -> return Result.Error(Error.new(line_num, col, "Unexpected character: '${ByteArray.from_array([c])}'"))
       }
     }
+  }
+
+  fn static chars_in_row(char: Int, arr: ref ByteArray, start: Int) -> Int {
+    let mut count = 0
+    for c in start.until(arr.size) {
+      if arr.get(c).or_panic != char { break }
+      count += 1
+    }
+    return count
   }
 
   fn static parse_table_header(tokens: Array[Token]) -> Result[Array[Token], Error] {
@@ -468,7 +489,7 @@ type pub Parser {
       case (Other, "true") ->
         TomlValue.Bool(true)
 
-      case (Other, str) if str.contains?('-') and str.starts_with?('-').false? -> {
+      case (Other, str) if str.contains?('-') and str.starts_with?('-').false? and str.contains?('e').false? and str.contains?('E').false? -> {
         let mut str = str.to_upper
         if tokens.peek.some? and tokens.peek.get.type == TokenType.Other {
           str += "T" + tokens.next.get.str
@@ -708,6 +729,10 @@ type pub Parser {
 
   fn inline static is_symbol?(c: Int) -> Bool {
     [ascii.COMMA, ascii.DOT, ascii.EQUAL, ascii.OPEN_BRACKET, ascii.CLOSE_BRACKET, ascii.OPEN_BRACE, ascii.CLOSE_BRACE].contains?(c)
+  }
+
+  fn inline static is_whitespace?(c: Int) -> Bool {
+    c == ascii.TAB or c == ascii.SPACE
   }
 
   fn static parse_unicode[I : Iter[(Int, Int)] + mut](bytes: mut I, num_digits: Int) -> Option[ByteArray] {
